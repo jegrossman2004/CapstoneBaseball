@@ -46,7 +46,7 @@ swing_data <- swing_data %>%
     
     # Pitch groupings
     pitch_group = case_when(
-      pitch_type %in% c("FF", "SI", "FC") ~ "Fastball",
+      pitch_type %in% c("FF", "SI", "FC", "FA") ~ "Fastball",
       pitch_type %in% c("SL", "CU", "KC", "SV") ~ "Breaking Ball",
       pitch_type %in% c("CH", "FS", "FO") ~ "Offspeed",
       TRUE ~ "Other"
@@ -263,22 +263,21 @@ p1 <- ggplot(contact_by_combined, aes(x = adjustability_quality, y = contact_rat
 
 
 # Plot 2: 3D scatter - Horizontal vs Vertical colored by contact
-p2 <- ggplot(swings %>% sample_n(min(5000, nrow(swings))), 
-             aes(x = horiz_angle_diff_abs, y = vert_angle_diff_abs, color = contact)) +
-  geom_point(alpha = 0.4, size = 2) +
+p2 <- ggplot(swings %>% sample_n(min(5000, nrow(swings))) %>%
+                          mutate(contact_label = factor(contact, levels = c(0, 1), 
+                                                                                                      labels = c("Whiff", "Contact"))), 
+                        aes(x = horiz_angle_diff_abs, y = vert_angle_diff_abs, color = contact_label)) +
+    geom_point(alpha = 0.4, size = 2) +
   geom_vline(xintercept = 10, linetype = "dashed", color = "gray40", alpha = 0.5) +
-  geom_hline(yintercept = 10, linetype = "dashed", color = "gray40", alpha = 0.5) +
-  scale_color_manual(values = c("0" = "#e74c3c", "1" = "#2ecc71"),
-                     labels = c("Whiff", "Contact")) +
+   geom_hline(yintercept = 10, linetype = "dashed", color = "gray40", alpha = 0.5) +
+  scale_color_manual(values = c("Whiff" = "#e74c3c", "Contact" = "#2ecc71")) +
   labs(title = "3D Adjustability Space: Horizontal vs Vertical Matching",
-       subtitle = "Bottom-left quadrant = elite adjustability in both planes",
-       x = "Horizontal Angle Difference (degrees)",
-       y = "Vertical Angle Difference (degrees)",
-       color = "Outcome") +
+                 subtitle = "Bottom-left quadrant = elite adjustability in both planes",
+                 x = "Horizontal Angle Difference (degrees)",
+                y = "Vertical Angle Difference (degrees)",
+                color = "Outcome") +
   theme_minimal(base_size = 12) +
   theme(legend.position = "bottom")
-
-
 
 # Plot 3: Contact rate heatmap
 contact_heatmap_data <- swings %>%
@@ -353,6 +352,8 @@ p2
 p3
 p4
 p5
+
+median(player_3d_metrics$avg_3d_diff)
 
 # ============================================================================
 # 5. STATISTICAL MODELS - COMBINED ADJUSTABILITY
@@ -495,13 +496,10 @@ cat("3D adjustability vs bat speed:",
 
 # Plot 6: Player 3D adjustability vs contact rate
 p6 <- ggplot(player_3d_metrics, 
-             aes(x = avg_3d_diff, y = contact_rate, color = player_type)) +
+             aes(x = avg_3d_diff, y = contact_rate, color = avg_bat_speed)) +
   geom_point(aes(size = n_swings), alpha = 0.6) +
-  geom_smooth(method = "lm", se = TRUE, color = "#e74c3c", size = 1.5) +
-  scale_color_manual(values = c("Elite Adjuster" = "#27ae60",
-                                "Good Adjuster" = "#3498db",
-                                "Average Adjuster" = "#f39c12",
-                                "Limited Adjuster" = "#e74c3c")) +
+  geom_smooth(method = "lm", se = TRUE, color = "black", size = 1.5) +
+  scale_color_gradient2(low = "blue",mid = "grey", high = "red", midpoint = 70) +
   labs(title = "Player-Level: 3D Adjustability vs Contact Rate",
        subtitle = paste0("Players with ≥", MIN_SWINGS_FOR_PLAYER_ANALYSIS, " swings"),
        x = "Average 3D Angle Difference (degrees)",
@@ -512,7 +510,6 @@ p6 <- ggplot(player_3d_metrics,
 
 p6
 
-ggsave("3d_plot6_player_adjustability.png", p6, width = 12, height = 8, dpi = 300)
 
 # Plot 7: Player profiles - horizontal vs vertical with 3D as size
 p7 <- ggplot(player_3d_metrics, 
@@ -530,7 +527,6 @@ p7 <- ggplot(player_3d_metrics,
 
 p7
 
-ggsave("3d_plot7_player_profiles.png", p7, width = 10, height = 8, dpi = 300)
 
 # Plot 8: Pitch-type weights visualization
 p8 <- pitch_weights %>%
@@ -557,7 +553,6 @@ p8 <- pitch_weights %>%
 
 p8
 
-ggsave("3d_plot8_pitch_weights.png", p8, width = 10, height = 6, dpi = 300)
 
 # ============================================================================
 # 7. PITCH-TYPE SPECIFIC PLAYER ANALYSIS
@@ -603,6 +598,8 @@ os_specialists <- player_by_pitch %>%
   head(10)
 print(os_specialists)
 
+
+
 # ============================================================================
 # 8. PREDICTIVE POWER ANALYSIS
 # ============================================================================
@@ -638,4 +635,5 @@ cat("Combined 3D metric:", round(as.numeric(r2_combined), 4), "\n")
 cat("Separate H+V:", round(as.numeric(r2_separate), 4), "\n")
 cat("Difference:", round(as.numeric(r2_separate - r2_combined), 4), "\n")
 cat("(Separate should be slightly better - uses more information)\n")
+
 
