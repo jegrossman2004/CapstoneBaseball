@@ -1,0 +1,164 @@
+---
+title: "Swing Clusters Within Localized Strike-Zone Pitch Contexts"
+output: 
+  posterdown::posterdown_html
+---
+
+```{r setup, echo=FALSE, warning=FALSE, message=FALSE}
+library(dplyr)
+library(ggplot2)
+library(knitr)
+library(scales)
+
+cluster_count_tbl <- tibble(
+  selected_clusters = 3:7,
+  buckets = c(2, 52, 17, 8, 2)
+)
+
+top_contact <- tibble(
+  bucket_label = c(
+    "lower | away | vaa_mid | haa_high",
+    "lower | away | vaa_low | haa_low",
+    "lower | away | vaa_low | haa_mid",
+    "lower | away | vaa_mid | haa_low",
+    "lower | middle | vaa_low | haa_mid",
+    "lower | middle | vaa_low | haa_high"
+  ),
+  max_cluster_gap = c(0.633, 0.632, 0.631, 0.626, 0.620, 0.523)
+) %>%
+  mutate(bucket_label = factor(bucket_label, levels = rev(bucket_label)))
+
+launch_angle_gap <- tibble(
+  bucket_label = c(
+    "upper | away | vaa_mid |\nhaa_high",
+    "upper | inside | vaa_high\n| haa_mid",
+    "upper | away | vaa_high |\nhaa_mid",
+    "lower | inside | vaa_high\n| haa_mid",
+    "middle | inside | vaa_high\n| haa_low",
+    "upper | away | vaa_high |\nhaa_high",
+    "upper | inside | vaa_mid |\nhaa_high",
+    "lower | middle | vaa_high\n| haa_high"
+  ),
+  min_launch_angle = c(-29.9, -7.4, -20.1, -15.9, -12.1, -17.2, -3.6, -15.2),
+  max_launch_angle = c(24.5, 43.7, 30.9, 33.8, 37.0, 31.1, 40.0, 27.0),
+  launch_angle_gap = c(54.4, 51.1, 51.1, 49.8, 49.1, 48.3, 43.5, 42.2)
+) %>%
+  mutate(bucket_label = factor(bucket_label, levels = rev(bucket_label)))
+
+sig_summary <- tibble(
+  outcome = c("Contact", "In play", "Launch angle", "xwOBA on contact"),
+  overall_sig = c(80, 81, 81, 71),
+  total_buckets = c(81, 81, 81, 81),
+  pairwise_sig = c(499, 558, 568, 304),
+  total_pairwise = c(650, 650, 650, 650)
+)
+
+validation_tbl <- tibble(
+  Metric = c("Mean silhouette", "Median silhouette", "Mean stability ARI", "Median stability ARI"),
+  Value = c(0.192, 0.196, 0.997, 1.000)
+)
+
+player_tbl <- tibble(
+  Player = c("Steven Kwan", "Luis Arraez", "Nico Hoerner", "Mookie Betts", "Javier Sanoja"),
+  `Tracked swings` = c(1276, 1391, 1351, 1159, 392),
+  `Contact vs context` = c(0.111, 0.107, 0.096, 0.094, 0.089)
+)
+```
+
+# Main Result: Similar Pitches Still Produced Multiple Swing Types
+
+Holding pitch context constant did not collapse swings into one common solution. Most of the 81 localized pitch buckets supported four swing clusters, and some supported as many as seven.
+
+```{r cluster-count-plot, echo=FALSE, fig.height=3.5}
+ggplot(cluster_count_tbl, aes(x = factor(selected_clusters), y = buckets)) +
+  geom_col(fill = "#1f5aa6", width = 0.72) +
+  geom_text(aes(label = buckets), vjust = -0.3, size = 4) +
+  labs(
+    x = "Clusters selected within bucket",
+    y = "Number of buckets",
+    title = "Most buckets supported four swing archetypes"
+  ) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.12))) +
+  theme_minimal(base_size = 14)
+```
+
+# Contact Separation Was the Strongest Outcome Signal
+
+The largest between-cluster differences appeared in contact-related outcomes, especially in lower-zone pitch buckets. In the strongest buckets, the best and worst contact clusters were separated by more than 60 percentage points.
+
+```{r contact-effects-plot, echo=FALSE, fig.height=5}
+ggplot(top_contact, aes(x = max_cluster_gap, y = bucket_label)) +
+  geom_col(fill = "#c44e52", width = 0.72) +
+  geom_text(aes(label = percent(max_cluster_gap, accuracy = 1)), hjust = -0.08, size = 3.6) +
+  scale_x_continuous(labels = percent_format(accuracy = 1), expand = expansion(mult = c(0, 0.14))) +
+  labs(
+    x = "Best-to-worst cluster gap in contact rate",
+    y = NULL,
+    title = "Largest contact-rate gaps were concentrated low in the zone"
+  ) +
+  theme_minimal(base_size = 13)
+```
+
+# Contact Shape Also Changed After Contact
+
+Cluster differences were not limited to making contact. Some buckets showed large launch-angle gaps across clusters, meaning similar pitch contexts still produced trajectories ranging from ground balls to high fly balls.
+
+```{r launch-angle-gap-plot, echo=FALSE, fig.height=5}
+ggplot(launch_angle_gap, aes(y = bucket_label)) +
+  geom_segment(aes(x = min_launch_angle, xend = max_launch_angle, yend = bucket_label), linewidth = 1.1, color = "#8ab1e3") +
+  geom_vline(xintercept = 0, color = "#b7c4cf", linetype = "dashed") +
+  geom_point(aes(x = min_launch_angle), size = 2.7, color = "#d1495b") +
+  geom_point(aes(x = max_launch_angle), size = 2.7, color = "#2a9d8f") +
+  geom_text(aes(x = max_launch_angle + 2, label = paste0(round(launch_angle_gap, 1), "°")), hjust = -0.1, size = 3.4) +
+  labs(
+    x = "Average launch angle on contact",
+    y = NULL,
+    title = "Largest launch-angle gaps within the same pitch bucket"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(panel.grid.major.y = element_blank())
+```
+
+# Widespread Significance, Different Practical Strength
+
+```{r significance-table, echo=FALSE}
+kable(
+  sig_summary %>%
+    mutate(
+      `Overall significant` = paste0(overall_sig, "/", total_buckets),
+      `Pairwise significant` = paste0(pairwise_sig, "/", total_pairwise)
+    ) %>%
+    select(
+      Outcome = outcome,
+      `Overall significant`,
+      `Pairwise significant`
+    ),
+  caption = "Between-cluster outcome differences"
+)
+```
+
+xwOBA on contact also differed across clusters, but its overall effect sizes were usually smaller and more distributed than contact rate or in-play rate. The clearest signal was swing shape separating contact and fair-contact success.
+
+# Stable Clusters, Not Perfectly Separate Categories
+
+The cluster structure was moderately separated but highly stable. That supports interpretation as repeatable swing archetypes, not perfectly isolated natural categories.
+
+```{r validation-box, echo=FALSE}
+kable(validation_tbl, caption = "Cluster validation summary")
+```
+
+# Player-Level Signal
+
+The same framework scaled to individual hitters. Several recognizable contact-oriented players stood out as better than expected after adjusting for bucket context.
+
+```{r player-table, echo=FALSE}
+kable(player_tbl, caption = "Top context-adjusted contact performers")
+```
+
+# Final Takeaways
+
+- Similar in-zone pitches still produced multiple swing archetypes.
+- Contact rate and in-play rate were the clearest outcome separators.
+- Launch angle showed that clusters also differed in contact shape.
+- xwOBA on contact differed too, but less cleanly than contact outcomes.
+- The clusters were stable enough to support league-level and player-level interpretation.
