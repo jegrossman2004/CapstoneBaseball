@@ -1,0 +1,367 @@
+---
+title: "Strike-Zone Pitch Context and Bat-Tracking Swing Clusters"
+subtitle: "Final Technical Report"
+output:
+  pdf_document:
+    toc: true
+    toc_depth: 2
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE)
+```
+
+# Background and Research Questions
+
+Major League Baseball has increasingly moved toward tracking not only where pitches travel and how batted balls behave, but also how the bat moves through the hitting zone. Statcast pitch-tracking and batted-ball data have been public for several years, and the more recent addition of bat-tracking variables makes it possible to study hitting as a sequence that connects pitch context, swing shape, and outcome. This project uses that opportunity to ask whether hitters produce meaningfully different swing patterns against similar pitches in the strike zone, and whether those swing patterns are associated with different results.
+
+The motivation for the project comes from a practical baseball question. A hitter does not swing in a vacuum. The swing is a response to a pitch with a specific location, trajectory, and incoming angle. A swing that works well against a lower, steeper pitch may not be the same swing that works well against an elevated, flatter pitch. For that reason, this project does not attempt to identify one universal set of swing types across all pitches. Instead, it first narrows the pitch context and then studies swing variation within that context.
+
+The central research question is: within specific strike-zone pitch contexts, can distinct swing types be identified, and do those swing types end with significantly different outcomes?
+
+That broad question is addressed through several more specific questions:
+
+- Within the strike zone, can pitches be grouped into meaningful context buckets using vertical location, horizontal location, vertical approach angle, and horizontal approach angle?
+- Within one of those pitch-context buckets, do hitters tend to produce a single common swing type, or are there multiple distinct swing archetypes?
+- If multiple swing archetypes exist in a bucket, do those swing clusters differ in contact rate, foul rate, in-play rate, launch speed, launch angle, and xwOBA on contact?
+- Are some buckets associated with cleaner or more stable cluster structure than others?
+- At the player level, do individual hitters show different patterns in which buckets they see most often and which swing clusters they occupy within those buckets?
+
+These questions are important statistically because they combine unsupervised learning with follow-up outcome testing. The clustering step asks whether repeated swing patterns can be found without directly using the outcome variables, while the testing step asks whether those independently defined swing groups differ in performance. This separation is important because the project is not simply sorting swings by result after the fact. It is first identifying swing shapes within similar pitch contexts, then evaluating whether those shapes are meaningfully associated with different outcomes.
+
+The questions are also important substantively because they connect a technical bat-tracking dataset to baseball interpretation. If pitch context fully determined the hitter's swing response, then narrowing the data to similar pitch buckets would leave little meaningful swing variation. If, instead, several stable swing clusters remain within the same pitch bucket, then swing shape is a distinct part of the hitting process. This distinction matters for player evaluation, coaching, and future work on hitter development because it suggests that the same pitch context can still be solved in different ways.
+
+# Data Description
+
+The data used for this project are pitch-by-pitch Statcast data for the 2024 and 2025 Major League Baseball regular seasons, downloaded from Baseball Savant. Baseball Savant is MLB's public clearinghouse for Statcast data. Statcast is MLB's tracking system for pitch flight, batted-ball outcomes, player movement, and, more recently, bat-tracking metrics. These data are collected using league-wide camera and radar infrastructure installed across MLB stadiums, and Baseball Savant is the standard public site through which researchers, analysts, media members, and fans access much of this information.
+
+After combining the 2024 and 2025 season files, the raw dataset contained 1,475,257 total pitches. The project did not treat that full raw dataset as one undifferentiated table. Instead, the working dataset was narrowed to pitches that crossed through the strike zone. This narrowing was intentional. The goal was to create a focused setting where pitch contexts could be compared more cleanly, where swings were common enough to support analysis, and where location and incoming angle could be interpreted inside a shared strike-zone frame.
+
+The strike-zone filter used pitch location at the front of home plate together with each hitter's individualized strike-zone boundaries. Specifically, the pitch-location fields were compared with the hitter-specific `sz_top` and `sz_bot` values for vertical location, while the horizontal strike-zone boundary used the standard plate-width frame. After this restriction, the working sample contained 670,788 in-zone pitches, 453,253 in-zone swings, and 423,005 tracked swings with the bat-tracking variables needed for clustering.
+
+```{r table-sample-coverage}
+knitr::kable(
+  data.frame(
+    Measure = c(
+      "Total pitches in combined 2024-2025 dataset",
+      "In-zone pitches used for analysis",
+      "In-zone swings",
+      "Tracked swings with full bat-tracking metrics",
+      "Localized pitch buckets",
+      "Buckets with enough swings to cluster"
+    ),
+    Count = c("1,475,257", "670,788", "453,253", "423,005", "81", "81")
+  ),
+  caption = "Analytical sample coverage for the primary workflow.",
+  align = c("l", "r")
+)
+```
+
+The variables most central to the project can be grouped into three categories. The first category is pitch context. This includes vertical pitch location, horizontal pitch location, vertical approach angle (VAA), horizontal approach angle (HAA), pitch type, velocity, and movement. The second category is swing shape and intercept geometry. These are the bat-tracking variables used for clustering: swing length, attack angle, attack direction, swing path tilt, and the two batter-relative intercept-point coordinates. Bat speed was retained as an important descriptive variable, but it was excluded from the primary clustering mode so that clusters would be driven by swing shape and intercept geometry rather than by raw bat speed. The third category is pitch and contact outcome. These variables include whether the hitter made contact, whether the ball was fouled, whether the ball was put in play, launch speed, launch angle, and expected weighted on-base average on contact.
+
+One important preprocessing decision was to use localized VAA/HAA buckets. Pitches were first grouped by vertical and horizontal location inside the strike zone. Within each of those location cells, VAA and HAA bins were then defined locally. In other words, a pitch was not labeled as high VAA relative to all in-zone pitches in the league. It was labeled relative to the VAA distribution in that specific part of the strike zone. The same logic was used for HAA. This localized approach was emphasized because it more directly reflects the hitting problem in a given pitch location. A pitch's incoming angle can have different meaning in different parts of the zone, so the final workflow treats approach angle as location-specific.
+
+The horizontal components of the analysis were also adjusted for batter handedness. Horizontal pitch location was converted into a hitter-relative frame so that inside and away had the same baseball meaning for right-handed and left-handed hitters. HAA was handled analogously, so side-to-side pitch approach was interpreted relative to the hitter rather than only relative to the field coordinate system. This avoided treating an inside pitch to a right-handed hitter as if it were the same as an outside pitch to a left-handed hitter.
+
+There are good reasons to view these data as trustworthy for this project. They are produced by MLB rather than by an unknown outside collector, they are widely used in public and professional baseball analysis, and the core variables are mostly direct measurements or direct transformations of measurements. Pitch location, pitch velocity, pitch trajectory components, launch speed, launch angle, and bat-tracking values are not subjective labels assigned by an observer.
+
+At the same time, trustworthy does not mean perfect. Some rows are missing bat-tracking data and therefore cannot be used for the clustering portion of the project. Public Statcast documentation is also less explicit than ideal for some coordinate fields, especially the exact interpretation of the intercept variables. In addition, any large tracking system can contain measurement noise, and baseball outcomes themselves are noisy. These issues do not prevent the use of the data, but they do affect how strongly the results should be interpreted.
+
+# Methods
+
+The primary method used in this project was K-means clustering, applied separately within each localized pitch bucket. The purpose was not to cluster all swings in baseball into one master set of swing types. Instead, the workflow first defined the pitch context and then asked what kinds of swings occurred inside that context. This was important because the research question focused on heterogeneity within similar pitch contexts, not on broad differences between swings at very different pitches.
+
+The final workflow proceeded in several stages. First, the dataset was restricted to pitches that crossed through the strike zone. Second, the strike zone was divided into vertical and horizontal location cells, and localized VAA and HAA bins were created inside each location cell. This produced 81 localized pitch buckets. Third, tracked swings were clustered separately within each bucket using swing length, attack angle, attack direction, swing path tilt, and the two intercept-point coordinates. Fourth, cluster outcomes were compared using statistical tests and effect sizes. Fifth, the selected clusters were evaluated for separation and stability. Finally, player-level summaries were produced to show how the framework could be used beyond league-wide results.
+
+K-means clustering was appropriate because the main question was about recurring multivariable swing patterns. A single swing metric such as attack angle or swing length can be informative, but swing shape is not one-dimensional. Two swings can have similar attack angles while differing in attack direction, intercept point, or swing path tilt. Clustering provides a way to group swings based on the combined pattern of several features at once.
+
+The number of clusters was selected separately within each pitch bucket rather than being fixed across the entire project. Candidate values of K were compared using average silhouette score, subject to minimum cluster-size rules. The workflow also allowed somewhat richer solutions when they performed nearly as well as the simplest best-silhouette solution. This refinement was included because a bucket may support more than two swing types even when the best silhouette score is not overwhelmingly larger than nearby alternatives. The final clustering results therefore reflect a balance between separation quality, interpretability, and sample-size adequacy.
+
+After clusters were assigned, outcome comparisons were conducted within each bucket. Chi-squared tests were used for binary outcomes: contact rate, foul rate, and in-play rate. Kruskal-Wallis tests were used for continuous outcomes: launch speed, launch angle, and xwOBA on contact. These tests were paired with effect sizes because the dataset is very large and p-values alone can overstate the practical importance of small differences. Cramer's V was used for binary outcomes, and epsilon-squared was used for Kruskal-Wallis tests. Pairwise proportion tests and pairwise Wilcoxon tests were used as follow-up comparisons between specific clusters.
+
+The project also included a cluster-validation stage. Silhouette values were used to summarize separation, while repeated K-means fits were used to assess stability through adjusted Rand index (ARI). This validation step was important because the existence of statistically significant outcome differences does not automatically prove that the clusters themselves are well separated or reproducible. The validation stage helped distinguish between clusters that were stable and interpretable and clusters that may have been more overlapping.
+
+Several alternatives were considered. A regression framework could have been used to predict one outcome, such as contact or xwOBA on contact, from swing variables and pitch context. That would be useful for estimating marginal relationships while controlling for other variables, but it would answer a different question. The goal here was to identify recurring swing archetypes within context, not only to estimate the average association between one swing variable and one outcome. More flexible clustering approaches, such as hierarchical clustering or Gaussian mixture models, were also considered. Those methods may be useful in future work, but K-means was chosen because it is computationally feasible at this scale, relatively interpretable, and straightforward to validate across many buckets.
+
+The methods require several assumptions. K-means assumes that variables are on comparable scales and that Euclidean distance provides a useful way to compare observations. The workflow addressed the scale issue by standardizing clustering variables before fitting K-means. Whether Euclidean distance is fully ideal for swing data is harder to prove, but it is a reasonable first choice for a multivariable clustering problem. K-means also assumes that a fixed number of clusters can provide a useful partition inside each bucket. This assumption was handled by allowing K to vary by bucket rather than forcing the same number of clusters everywhere.
+
+The outcome tests also have assumptions. Chi-squared tests and Kruskal-Wallis tests assume that observations are independent enough for the comparisons to be meaningful. Pitch-by-pitch baseball data are not perfectly independent because they include repeated hitters, pitchers, teams, and game contexts. For that reason, the tests should be interpreted as descriptive comparisons within a large observational dataset rather than as strict causal tests. The results show associations between swing clusters and outcomes, not proof that changing one swing feature in isolation would cause a hitter to move to a different cluster or produce a specific result.
+
+# Results
+
+The primary analysis used a localized vertical approach angle (VAA) and horizontal approach angle (HAA) framework together with bat-speed-independent clustering. The full combined 2024 and 2025 Statcast dataset contained 1,475,257 pitches. After restricting analysis to pitches that crossed the strike zone, the working sample contained 670,788 in-zone pitches, 453,253 swings, and 423,005 tracked swings with all necessary bat-tracking variables for clustering.
+
+Pitches were grouped into 81 localized strike-zone buckets using vertical location and horizontal location to create nine zones, and VAA and HAA to create nine groups of angle combinations within each zone. All 81 buckets contained a sufficient amount of tracked swings to complete the clustering process. The narrowed in-zone framework still preserved enough data to support within-context comparisons at scale.
+
+## Pitch-Bucket Coverage
+
+The most heavily populated buckets were concentrated in the middle and lower parts of the strike zone, especially buckets centered around middle-middle and lower-middle locations. The ten largest buckets each contained between roughly 7,500 and 9,900 tracked swings. For example, `middle | middle | vaa_high | haa_mid` contained 9,876 tracked swings, while `middle | middle | vaa_mid | haa_mid` contained 9,870. This concentration suggests that the strongest empirical conclusions in the report will naturally come from pitch contexts that are both common and internally variable.
+
+Figure 1 displays the distribution of tracked swings across the most populated buckets. The heaviest concentration appears in the middle and lower sections of the zone, which is consistent with where many of the most stable league-wide results emerge.
+
+```{r fig-bucket-counts, fig.cap="Tracked-swing counts for the most populated localized pitch buckets.", out.width='100%'}
+knitr::include_graphics("final_assets/figure_1_bucket_counts.png")
+```
+
+## Cluster Structure Within Buckets
+
+The clustering results show that hitters do not converge on a single swing type even when pitch context is controlled for. A majority of the pitch buckets supported four swing clusters rather than only one or two. Specifically, 52 of the 81 total buckets selected four clusters, 17 selected five clusters, 8 selected six clusters, 2 selected seven clusters, and 2 selected three clusters. This indicates that the typical pitch bucket contains multiple swing archetypes rather than one dominant response.
+
+If swing behavior were almost fully determined by pitch context, most buckets would be expected to collapse into either one or two very similar swing groups. Instead, the clustering results suggest meaningful within-context diversity of swings. The variation in number of clusters also suggests that some pitch contexts allow for or create more diverse swing responses than others.
+
+```{r table-cluster-counts}
+knitr::kable(
+  data.frame(
+    `Selected clusters` = c(3, 4, 5, 6, 7),
+    Buckets = c(2, 52, 17, 8, 2),
+    check.names = FALSE
+  ),
+  caption = "Number of clusters selected per localized pitch bucket.",
+  align = c("r", "r")
+)
+```
+
+## Outcome Differences Across Swing Clusters
+
+The strongest between-cluster differences appeared in contact-related outcomes, especially in lower-zone pitch buckets. At the overall-test level, 80 out of 81 buckets showed significant between-cluster differences in contact, all 81 buckets were significant for fouls, all 81 were significant for in-play rate, all 81 were significant for exit velocity, all 81 were significant for launch angle, and 71 out of 81 were significant for xwOBA on contact. These p-values indicate that cluster differences were common throughout the strike zone, but due to the size of the dataset, effect sizes are a more practical way to evaluate the importance of these differences.
+
+```{r table-overall-significance}
+knitr::kable(
+  data.frame(
+    Outcome = c("Contact rate", "Foul rate", "In-play rate", "xwOBA on contact", "Exit velocity", "Launch angle"),
+    Test = c("Chi-squared", "Chi-squared", "Chi-squared", "Kruskal-Wallis", "Kruskal-Wallis", "Kruskal-Wallis"),
+    `Significant buckets` = c(80, 81, 81, 71, 81, 81),
+    `Total buckets` = rep(81, 6),
+    check.names = FALSE
+  ),
+  caption = "Overall significance results across 81 localized pitch buckets.",
+  align = c("l", "l", "r", "r")
+)
+```
+
+The largest effect sizes were found mostly in contact-related outcomes. The strongest overall results included the following lower-zone buckets:
+
+```{r table-top-contact-effects}
+knitr::kable(
+  data.frame(
+    Bucket = c(
+      "lower | away | vaa_low | haa_mid",
+      "lower | away | vaa_low | haa_low",
+      "lower | middle | vaa_low | haa_mid",
+      "lower | away | vaa_mid | haa_low",
+      "lower | middle | vaa_low | haa_low"
+    ),
+    Outcome = rep("Contact rate", 5),
+    `Effect size` = c(0.572, 0.570, 0.564, 0.549, 0.527),
+    `Max cluster gap` = c(0.631, 0.632, 0.620, 0.626, 0.495),
+    `p-value` = rep("< 0.001", 5),
+    check.names = FALSE
+  ),
+  caption = "Largest overall contact-rate effect sizes across localized pitch buckets.",
+  align = c("l", "l", "r", "r", "r")
+)
+```
+
+These are large differences in practical baseball terms. Within the same pitch bucket, some clusters showed contact rates more than 0.60 apart in absolute terms. That means that the way the bat moved through the zone was strongly associated with whether the hitter made contact at all, even after pitch location and approach angle had been held relatively constant.
+
+Figure 2 shifts from contact frequency to contact shape by showing the gap between the highest launch angle and lowest launch angle swing clusters inside each of the twelve buckets with the largest launch-angle separation. The differences show that within the same pitch context, different swing groups can create launch angles ranging from ground balls to high fly balls. Even after contact is made, different swing clusters can still produce substantially different batted-ball trajectories within the same pitch context.
+
+```{r fig-launch-angle-gap, fig.cap="Largest within-bucket launch-angle gaps between swing clusters.", out.width='100%'}
+knitr::include_graphics("final_assets/figure_2_launch_angle_gap.png")
+```
+
+## xwOBA on Contact: Significant but Usually Smaller Effects
+
+The `xwoba_on_contact` results were more nuanced. Cluster differences in xwOBA on contact were common, but the overall effect sizes were generally smaller than those for contact rate or in-play rate. The strongest xwOBA-on-contact buckets still had statistically strong evidence of cluster separation, as shown in Table 5.
+
+```{r table-top-xwoba}
+knitr::kable(
+  data.frame(
+    Bucket = c(
+      "lower | inside | vaa_mid | haa_low",
+      "lower | inside | vaa_mid | haa_high",
+      "upper | away | vaa_high | haa_low",
+      "upper | inside | vaa_high | haa_mid",
+      "middle | away | vaa_mid | haa_mid"
+    ),
+    `Epsilon-squared` = c(0.0409, 0.0306, 0.0294, 0.0273, 0.0269),
+    `Max cluster median gap` = c(0.174, 0.335, 0.325, 0.199, 0.187),
+    `p-value` = rep("< 0.001", 5),
+    check.names = FALSE
+  ),
+  caption = "Largest xwOBA-on-contact overall effect sizes across localized pitch buckets.",
+  align = c("l", "r", "r", "r")
+)
+```
+
+Even these effect sizes are modest relative to the contact-rate effect sizes reported above. However, that does not mean the clusters are interchangeable after contact occurs. Epsilon-squared is an overall effect size, so it captures the overall share of variation explained across all clusters in a bucket. If one bucket contains one high-performing cluster, one low-performing cluster, and several middle clusters, the overall effect size can remain modest even though some specific cluster-to-cluster differences are still meaningful.
+
+The saved pairwise results support this interpretation. Across all buckets, 304 of 650 pairwise `xwoba_on_contact` comparisons remained significant after multiple-testing adjustment, compared with 499 of 650 for `contact_flag` and 558 of 650 for `in_play_flag`. In other words, xwOBA-on-contact differences were still common, but they were less universal and usually less concentrated than the contact-related differences.
+
+One example is `middle | away | vaa_mid | haa_mid`, where the overall epsilon-squared value was only about 0.011. Despite that small overall effect size, cluster-level xwOBA-on-contact means ranged from roughly 0.255 to 0.524, and 5 of the 6 pairwise comparisons were statistically significant after adjustment. A similar pattern appeared in `middle | middle | vaa_mid | haa_mid`, where epsilon-squared was about 0.011, cluster means ranged from roughly 0.265 to 0.529, and 11 of 15 pairwise comparisons were significant. These examples show that small xwOBA-on-contact overall effect sizes should be interpreted as modest overall separation rather than as evidence that cluster membership does not matter.
+
+```{r table-pairwise-significance}
+knitr::kable(
+  data.frame(
+    Outcome = c("Contact rate", "Foul rate", "In-play rate", "xwOBA on contact", "Exit velocity", "Launch angle"),
+    `Significant pairwise comparisons` = c(499, 474, 558, 304, 495, 568),
+    `Total pairwise comparisons` = rep(650, 6),
+    check.names = FALSE
+  ),
+  caption = "Significant pairwise comparisons after multiple-testing adjustment.",
+  align = c("l", "r", "r")
+)
+```
+
+## Cluster Validation
+
+The project included a validation stage to assess whether the selected clusters were meaningful and stable. Across the 81 buckets with multiple clusters, the mean selected silhouette value was 0.192 and the median selected silhouette value was 0.196. These values suggest moderate rather than extreme separation, meaning that the clusters are not perfectly distinct natural categories. Some overlap is present rather than sharply isolated swing types.
+
+At the same time, the stability results were extremely high. The mean adjusted Rand index (ARI) across repeated fits was 0.997, and the median ARI was 1.000. That means the selected cluster structures were highly reproducible once a bucket's cluster count had been chosen. This combination of moderate separation and extremely high stability supports an interpretation of the clusters as stable but somewhat overlapping swing archetypes.
+
+```{r table-validation-summary}
+knitr::kable(
+  data.frame(
+    `Validation metric` = c("Mean selected silhouette", "Median selected silhouette", "Mean stability ARI", "Median stability ARI"),
+    Value = c(0.192, 0.196, 0.997, 1.000),
+    check.names = FALSE
+  ),
+  caption = "Cluster-validation summary across localized pitch buckets.",
+  align = c("l", "r")
+)
+```
+
+The strongest-validation buckets included `upper | away | vaa_mid | haa_mid`, `upper | inside | vaa_low | haa_mid`, and `upper | away | vaa_low | haa_mid`. The weakest-validation buckets included `upper | middle | vaa_high | haa_mid`, `middle | middle | vaa_high | haa_mid`, and `lower | inside | vaa_low | haa_high`. Even these weaker buckets still showed high stability, but their lower silhouette values suggest that the boundaries between clusters were less distinct.
+
+## Player-Level Results
+
+The player-level outputs show that the framework is usable beyond league-wide summary tables. Several hitters with at least 150 tracked swings stood out for positive context-adjusted contact performance, including Steven Kwan, Luis Arraez, Nico Hoerner, Mookie Betts, and Javier Sanoja. This list of names is consistent with expectations.
+
+```{r table-player-contact}
+knitr::kable(
+  data.frame(
+    Player = c("Steven Kwan", "Luis Arraez", "Nico Hoerner", "Mookie Betts", "Javier Sanoja"),
+    `Tracked swings` = c("1,276", "1,391", "1,351", "1,159", "392"),
+    `Contact vs. bucket context` = c(0.111, 0.107, 0.096, 0.094, 0.089),
+    `Dominant bucket` = c(
+      "lower | away | vaa_low | haa_mid",
+      "lower | away | vaa_low | haa_high",
+      "lower | away | vaa_low | haa_high",
+      "lower | away | vaa_low | haa_high",
+      "lower | away | vaa_mid | haa_low"
+    ),
+    check.names = FALSE
+  ),
+  caption = "Highest context-adjusted contact performance among hitters with at least 150 tracked swings.",
+  align = c("l", "r", "r", "l")
+)
+```
+
+At the same time, the same players did not uniformly lead in context-adjusted xwOBA on contact, which again reinforces the broader league-level finding: the framework appears strongest for describing contact success and in-play success, rather than fully explaining all variation in batted-ball value.
+
+# Interpretation
+
+The central question of the project was whether distinct swing types could be identified within narrowly defined pitch contexts in the strike zone, and whether those swing types were associated with meaningfully different outcomes. The results support a clear answer of yes to each of those questions.
+
+First, the structure of the clusters indicates that pitch context does not determine swing shape on its own. The majority of pitch buckets resulted in around four clusters, with some supporting even more. That means hitters do not produce one standard response to a given in-zone pitch context bucket as defined by location and incoming pitch angle. Instead, similar pitches are associated with multiple recurring swing archetypes.
+
+Second, the swing archetype differences matter most strongly for contact-related outcomes. Within many buckets, especially buckets lower in the zone, the difference between the contact rate and in-play rate of the best and worst contact clusters was extremely large. In baseball terms, this suggests that swing shape is strongly related to whether a hitter makes contact with the ball and whether that contact is in play as opposed to foul. This is an important conclusion of the project, as it implies that within-context swing differences are not simply cosmetic but are tied to meaningful differences in the success of the hitter.
+
+Third, xwOBA on contact does differ across clusters, but the pattern is more distributed than the contact-related outcomes. This means that the project should not be interpreted as saying that one swing type produces the best run value in every context. A more accurate interpretation is that some swing shapes seem better suited for creating contact and fair contact in a given pitch bucket, while the quality of the resulting batted ball can be produced by multiple swing types and remain influenced by additional factors beyond cluster variables alone.
+
+These findings suggest that pitch context and swing shape should be treated as related but distinct aspects of the hitting process. Pitch location and incoming pitch angle define the problem, but the hitter's attack angle, attack direction, swing path tilt, swing length, and intercept geometry still help determine which type of solution is attempted and how successful it is. For example, some solutions may sacrifice a higher chance at contact for a higher chance at making damaging contact.
+
+The player-level results extend this interpretation. The project framework can identify which hitters outperform bucket-level contact expectations, so it can be used not only for league-wide description but also for player-specific evaluation. In practical terms, the model could help identify hitters who consistently find stronger contact-oriented swing solutions within the same pitch contexts, as well as hitters whose worse outcomes may be tied to recurring within-bucket swing patterns.
+
+Overall, the results answer the project's main questions fairly directly. Distinct within-pitch-context swing clusters do exist. The clusters differ significantly in outcome.
+
+# Limitations
+
+There are several limitations of the data that should affect how the results are interpreted. First, the project uses only two seasons of bat-tracking data, 2024 and 2025. This allows for strong league-level analysis, but is somewhat lacking for studying longer-term questions such as player development, year-to-year consistency, or age-related changes in swing behavior. Second, there are unavailable data types that may explain more of the variation or response to pitch context. These include variables such as batting stance, more detailed timing information, or continuous measures of bat path rather than discrete values at contact.
+
+The methods also have limitations that are important to acknowledge. K-means clustering is a very useful and practical method, but it imposes some geometric assumptions that may not perfectly align with the swing data. It favors roughly compact clusters in a standardized feature space and may have the tendency to oversimplify patterns that are better described with more complex shapes. The silhouette-based cluster selection helps reduce arbitrary choice, but does not on its own prove that the selected number is correct in any deeper sense. The significance tests should also be interpreted carefully. The dataset is extremely large, meaning that even a modest difference could produce very small p-values. For that reason, the project uses effect sizes, max cluster gaps, and pairwise summaries rather than statistical significance alone for reporting practical importance. Also, pitch-level observations are not perfectly independent in a strict statistical sense because they come from repeated swings by the same hitters against the same pitchers in the same contexts. The chi-squared and Kruskal-Wallis tests are therefore best interpreted as descriptive comparisons within a large observational dataset.
+
+Another limitation is that the project is intentionally focused only on pitches in the strike zone. This was a useful narrowing step because it reduced the problem to pitches where committed swings are common and pitch contexts are easier to compare. However, it also means the results should not be generalized automatically to chase swings outside the zone, to take decisions, or to the full pitch-by-pitch decision process.
+
+The limitations matter because they place limits on the conclusions that can reasonably be drawn. The project supports strong descriptive statements about repeatable within-context swing groups and their associations with certain outcomes. It does not prove that changing a single swing variable would move a hitter into a different cluster or causally improve results by a predictable amount. The findings are best interpreted as a structured description of the league-wide relationship between pitch context, swing shape, and outcomes.
+
+# Conclusion
+
+This project found that when pitch context is defined using location and localized vertical approach angle and horizontal approach angle in the strike zone, hitters produce multiple distinct swing groups. The majority of these pitch context buckets resulted in four swing clusters, though the number ranged from three to seven. All of the 81 local pitch buckets contained a sufficient number of swings with complete bat-tracking data to support the clustering stage. These findings indicate that similar pitches do not force a single uniform swing type.
+
+The most important result with regard to outcome is that the created swing clusters are strongly associated with contact-related success. Contact rate and in-play rate differed across clusters, especially for pitch buckets in lower parts of the zone. The differences for these metrics were both statistically significant and practically large. xwOBA on contact also differed across clusters, but the effects tended to be smaller and were more spread out across clusters. This suggests that the project framework is best for understanding whether contact and in-play contact happen, rather than completely explaining the exact run value of every contacted ball.
+
+The cluster-validation results show that the selected clusters were highly stable even when they were not perfectly discrete. This supports the conclusion that the project is capturing repeatable swing archetypes, even as those archetypes are overlapping to some degree rather than existing as perfectly separated categories.
+
+Overall, the most important takeaway is that the shape of the swing can be grouped into archetypes after pitch context has been held constant, and the groups differ in the types of hitting outcomes. A reasonable direction for future work would be to strengthen work on player-level interpretation, connect localized pitch buckets explicitly to pitch types and movement, and develop a real-time swing cluster identifier that could be used to optimize players' swings in a controlled pitch-context environment.
+
+# Appendix A: Data Dictionary
+
+```{r appendix-data-dictionary}
+data_dictionary <- data.frame(
+  Variable = c(
+    "Bat Speed",
+    "Swing Length",
+    "Attack Direction",
+    "Swing Path Tilt",
+    "Attack Angle",
+    "Intercept X",
+    "Intercept Y",
+    "xwOBA on Contact",
+    "Exit Velocity",
+    "Launch Angle",
+    "Contact Rate",
+    "Foul Rate",
+    "In-Play Rate",
+    "Whiff Rate",
+    "Vertical Pitch Location",
+    "Horizontal Pitch Location",
+    "Vertical Approach Angle",
+    "Horizontal Approach Angle",
+    "Pitch Type",
+    "Pitch Velocity",
+    "Pitch Movement",
+    "Balls and Strikes",
+    "Runners on Base",
+    "Batter Name"
+  ),
+  Definition = c(
+    "Speed of the head of the bat in miles per hour at the point of contact, or at the intercept point where the ball path and bat path cross.",
+    "Total distance traveled by the head of the bat in feet.",
+    "Horizontal angle of the bat's travel at the intercept point.",
+    "Angle of the overall bat path over roughly the 40 milliseconds prior to contact. Lower values represent flatter paths, while larger values represent more upward or uppercut-oriented paths.",
+    "Vertical angle of the bat's travel at the intercept point.",
+    "Batter-relative intercept coordinate in inches. In this project, this variable is used as a side-to-side contact-geometry feature describing where the ball meets the bat relative to the hitter.",
+    "Batter-relative intercept coordinate in inches. In this project, this variable is used as a second intercept-geometry feature describing where the ball meets the bat relative to the hitter, though the public Statcast documentation is less explicit about the exact axis interpretation than for more standard pitch-location fields.",
+    "Expected weighted on-base average for contacted balls, based on the launch conditions of the batted ball. In this project it is used only on balls in play rather than as an all-pitch metric.",
+    "Speed of the ball in miles per hour immediately after contact with the bat.",
+    "Vertical angle at which the ball leaves the bat after contact, measured in degrees. Negative values represent ground balls, values near zero represent line drives, and larger positive values represent fly balls and pop-ups.",
+    "Rate at which a batter's swings make contact with the ball.",
+    "Rate at which a batter's swings make contact with the ball but the ball lands out of fair territory.",
+    "Rate at which a batter's swings make contact with the ball and the ball is put in fair territory.",
+    "Rate at which a batter's swings fail to make contact with the ball.",
+    "Vertical location of a pitch as it crosses the front of the plate in feet, measured from the ground. This is used together with each hitter's strike-zone top and bottom values to determine whether the pitch is inside the strike zone.",
+    "Horizontal location of a pitch as it crosses the front of the plate in feet, measured from the center of the plate. In the project workflow, this is converted to a hitter-relative inside/away frame so right-handed and left-handed hitters can be compared more directly.",
+    "Vertical angle at which the pitch is traveling as it crosses the front of home plate, in degrees. In the current analysis, VAA bins are defined locally within each strike-zone location cell.",
+    "Horizontal angle at which the pitch is traveling as it crosses the front of home plate, in degrees. In the current analysis, HAA is adjusted into a hitter-relative frame and binned locally within each strike-zone location cell.",
+    "Categorical classification of the type of pitch thrown. This can be retained in the broader dataset for context and future extensions even though it is not the primary organizing variable in the current clustering analysis.",
+    "Speed of the pitch in miles per hour at release.",
+    "Deviation of the pitch from a theoretical spin-free trajectory, typically measured in horizontal and vertical components. These variables help describe why a pitch arrives with a given VAA or HAA, even though they are not the main grouping variables in the current version of the project.",
+    "The count at the time of the pitch.",
+    "Indicators for whether a runner is present at first, second, and/or third base when the pitch is thrown.",
+    "Name or identifier of the hitter at the plate."
+  ),
+  check.names = FALSE
+)
+
+knitr::kable(
+  data_dictionary,
+  format = "latex",
+  booktabs = TRUE,
+  longtable = TRUE,
+  caption = "Data dictionary for key variables used in the final analysis.",
+  col.names = c("Variable", "Definition"),
+  align = c("p{1.45in}", "p{4.6in}")
+)
+```
